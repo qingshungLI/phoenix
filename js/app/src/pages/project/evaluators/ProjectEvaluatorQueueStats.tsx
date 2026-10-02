@@ -450,11 +450,11 @@ function QueuedStat({
             <Text
               size="S"
               color={
-                queue.status === "OVERLOADED"
-                  ? "danger"
-                  : queue.atCapacity
-                    ? "warning"
-                    : "text-700"
+                queue.atCapacity
+                  ? queue.status === "OVERLOADED"
+                    ? "danger"
+                    : "warning"
+                  : "text-700"
               }
             >
               {`· ${intFormatter(queue.queuedCount)} / ${intFormatter(queue.queuedLimit)} shared`}
