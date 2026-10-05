@@ -447,7 +447,16 @@ function QueuedStat({
         <Flex direction="row" gap="size-100" alignItems="center">
           <Flex direction="row" gap="size-75" alignItems="baseline">
             <StatValue>{intFormatter(projectQueuedCount)}</StatValue>
-            <Text size="S" color={queue.atCapacity ? "warning" : "text-700"}>
+            <Text
+              size="S"
+              color={
+                queue.status === "OVERLOADED"
+                  ? "danger"
+                  : queue.atCapacity
+                    ? "warning"
+                    : "text-700"
+              }
+            >
               {`· ${intFormatter(queue.queuedCount)} / ${intFormatter(queue.queuedLimit)} shared`}
             </Text>
           </Flex>
@@ -581,7 +590,7 @@ function StatValue({
   color = null,
   children,
 }: {
-  color?: "warning" | null;
+  color?: "warning" | "danger" | null;
   children: ReactNode;
 }) {
   return (
