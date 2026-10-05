@@ -125,9 +125,12 @@ async def _validate_code_evaluator_sandbox_config(
     source_code: str,
     sandbox_runtime: SandboxRuntimeContext,
 ) -> int:
-    sandbox_config_id = from_global_id_with_expected_type(
-        sandbox_config_global_id, SandboxConfig.__name__
-    )
+    try:
+        sandbox_config_id = from_global_id_with_expected_type(
+            sandbox_config_global_id, SandboxConfig.__name__
+        )
+    except ValueError as error:
+        raise BadRequest(str(error))
     async with db() as session:
         config_and_provider = (
             await session.execute(
@@ -163,13 +166,17 @@ async def _validate_code_evaluator_sandbox_config(
         adapter = SANDBOX_ADAPTERS.get(target_cfg.backend_type)
         if adapter is None:
             return sandbox_config_id
-        validated_config = adapter.config_model.model_validate(
-            {
-                "backend_type": target_cfg.backend_type,
-                "language": target_cfg.language,
-                **(target_cfg.config or {}),
-            }
-        )
+        try:
+            validated_config = adapter.config_model.model_validate(
+                {
+                    "backend_type": target_cfg.backend_type,
+                    "language": target_cfg.language,
+                    **(target_cfg.config or {}),
+                }
+            )
+        except ValidationError as error:
+            reasons = "; ".join(detail["msg"] for detail in error.errors())
+            raise BadRequest(f"Invalid sandbox config '{target_cfg.name}': {reasons}")
 
     # Sandboxed validation can wait for worker capacity. Run it after the short
     # metadata transaction releases SQLite's process-wide database lock.
