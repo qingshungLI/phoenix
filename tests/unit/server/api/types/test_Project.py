@@ -207,6 +207,7 @@ async def test_evaluation_queue(
         other_project = await _add_project(session)
         idle_project = await _add_project(session)
         project_session = await _add_project_session(session, project)
+        dropped_project_session = await _add_project_session(session, project)
         trace = await _add_trace(session, project, project_session)
         spans = [await _add_span(session, trace) for _ in range(3)]
         other_spans = [
@@ -311,6 +312,22 @@ async def test_evaluation_queue(
                     queued_ago=timedelta(minutes=10),
                     updated_ago=timedelta(minutes=2),
                 ),
+                # Dropped because the queue was full: never queued, so in neither rate.
+                models.EvalSessionWorkUnit(
+                    project_session_rowid=dropped_project_session.id,
+                    project_evaluator_id=session_evaluator,
+                    evaluated_through=now,
+                    status="OVERFLOWED",
+                ),
+                models.EvalSpanCursor(
+                    id=1,
+                    overflowed_counts={
+                        now.replace(second=0, microsecond=0).isoformat(): {
+                            str(span_evaluator): 2,
+                            str(other_project_evaluator): 5,
+                        }
+                    },
+                ),
             ]
         )
 
@@ -324,6 +341,7 @@ async def test_evaluation_queue(
                 queuedCount
                 runningCount
                 oldestQueuedAt
+                overflowedCount
                 queuedPerMinute
                 evaluationsPerMinute
                 targets { evaluationTarget queuedCount }
@@ -341,6 +359,7 @@ async def test_evaluation_queue(
     assert queue == {
         "queuedCount": 5,
         "runningCount": 2,
+        "overflowedCount": 3,
         # Five queued evaluations and one completed were queued within the window.
         "queuedPerMinute": pytest.approx(6 / 60),
         "evaluationsPerMinute": pytest.approx(2 / 60),
@@ -354,6 +373,7 @@ async def test_evaluation_queue(
         "queuedCount": 0,
         "runningCount": 0,
         "oldestQueuedAt": None,
+        "overflowedCount": 0,
         "queuedPerMinute": 0,
         "evaluationsPerMinute": 0,
         "targets": [

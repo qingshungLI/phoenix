@@ -54,6 +54,7 @@ from phoenix.server.api.types.SandboxConfig import Language
 from phoenix.server.online_eval.queue_health import (
     DEGRADED_QUEUE_WAIT,
     EVALUATION_LOAD_WINDOW,
+    OVERFLOW_WINDOW,
     QueuedWork,
     project_evaluator_run_status,
 )
@@ -97,6 +98,7 @@ class EvaluationTarget(Enum):
 
 
 _DEGRADED_QUEUE_WAIT_MINUTES = int(DEGRADED_QUEUE_WAIT.total_seconds() // 60)
+_OVERFLOW_WINDOW_MINUTES = int(OVERFLOW_WINDOW.total_seconds() // 60)
 _EVALUATION_LOAD_WINDOW_MINUTES = int(EVALUATION_LOAD_WINDOW.total_seconds() // 60)
 
 
@@ -123,6 +125,13 @@ class ProjectEvaluatorRunStatus(Enum):
     ERROR = strawberry.enum_value(
         "ERROR",
         description="The most recent evaluation run failed and will not be retried.",
+    )
+    OVERLOADED = strawberry.enum_value(
+        "OVERLOADED",
+        description=(
+            f"Some of this evaluator's new evaluations were dropped in the last "
+            f"{_OVERFLOW_WINDOW_MINUTES} minutes because the queue was full."
+        ),
     )
     DEGRADED = strawberry.enum_value(
         "DEGRADED",
@@ -151,10 +160,12 @@ class ProjectEvaluatorRunSummary:
         description=(
             "From this evaluator's own evaluations only; the shared queue's status does not "
             "affect it. DISABLED when turned off. Otherwise ERROR when the newest completed "
-            "run was given up on, DEGRADED when its oldest evaluation waiting to run, "
-            "including ones awaiting a retry, has waited over "
-            f"{_DEGRADED_QUEUE_WAIT_MINUTES} minutes, RUNNING when the newest completed run "
-            "produced an annotation, QUEUED when work is waiting but none has completed, "
+            "run was given up on, OVERLOADED when some of its new evaluations were dropped in "
+            f"the last {_OVERFLOW_WINDOW_MINUTES} minutes because the queue was full, DEGRADED "
+            "when its oldest evaluation waiting to run, including ones awaiting a retry, has "
+            f"waited over {_DEGRADED_QUEUE_WAIT_MINUTES} minutes, RUNNING when the newest "
+            "completed run produced an annotation, QUEUED when work is waiting but none has "
+            "completed, "
             "NEVER_RUN otherwise."
         )
     )
@@ -185,6 +196,12 @@ class ProjectEvaluatorRunSummary:
             "affect the status."
         )
     )
+    overflowed_count: int = strawberry.field(
+        description=(
+            f"Evaluations dropped in the last {_OVERFLOW_WINDOW_MINUTES} minutes because the "
+            "queue was full. They are not failures."
+        )
+    )
     last_error: Optional[str] = strawberry.field(
         description="The most recent evaluation error, or null if none was recorded."
     )
@@ -195,6 +212,7 @@ def _project_evaluator_run_summary(
     enabled: bool,
     counts: ProjectEvaluatorRunCounts,
     queued: QueuedWork,
+    overflowed_count: int,
 ) -> ProjectEvaluatorRunSummary:
     last_evaluated_at, last_failed_at = counts.last_evaluated_at, counts.last_failed_at
     status = project_evaluator_run_status(
@@ -202,6 +220,7 @@ def _project_evaluator_run_summary(
         last_evaluated_at=last_evaluated_at,
         last_failed_at=last_failed_at,
         queued=queued,
+        overflowed_count=overflowed_count,
         now=datetime.now(timezone.utc),
     )
     return ProjectEvaluatorRunSummary(
@@ -213,6 +232,7 @@ def _project_evaluator_run_summary(
         evaluated_count=counts.evaluated,
         failed_count=counts.failed,
         dropped_count=counts.dropped,
+        overflowed_count=overflowed_count,
         last_error=counts.last_error,
     )
 
@@ -1435,11 +1455,17 @@ class ProjectEvaluator(Node):
     async def run_summary(self, info: Info[Context, None]) -> ProjectEvaluatorRunSummary:
         record = await self._get_record(info)
         loaders = info.context.data_loaders
-        counts, queued = await asyncio.gather(
+        counts, queued, queue = await asyncio.gather(
             loaders.project_evaluator_run_counts.load((self.id, None, None)),
             loaders.project_evaluator_queues.load(self.id),
+            loaders.evaluation_queue.load(None),
         )
-        return _project_evaluator_run_summary(enabled=record.enabled, counts=counts, queued=queued)
+        return _project_evaluator_run_summary(
+            enabled=record.enabled,
+            counts=counts,
+            queued=queued,
+            overflowed_count=queue.overflowed_counts.get(self.id, 0),
+        )
 
     @strawberry.field(  # type: ignore[untyped-decorator]
         description=(
