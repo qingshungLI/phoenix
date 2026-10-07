@@ -383,19 +383,6 @@ def _validate_project_evaluator_target_update(
     raise BadRequest("evaluationTarget is fixed at project evaluator creation")
 
 
-async def _set_project_evaluator_enabled(
-    session: AsyncSession,
-    project_evaluator: models.ProjectEvaluator,
-    enabled: bool,
-) -> dict[models.EvaluationTarget, int]:
-    """Set the flag, dropping the evaluator's queued work if it changed; returns what was
-    dropped, to count once the transaction commits."""
-    if project_evaluator.enabled == enabled:
-        return {}
-    project_evaluator.enabled = enabled
-    return await drop_queued_work(session, [project_evaluator.id])
-
-
 async def _garbage_collect_evaluators(
     session: AsyncSession,
     *,
@@ -697,6 +684,18 @@ class ProjectEvaluatorMutationPayload:
 
 
 @strawberry.input
+class ClearProjectEvaluatorQueuedEvaluationsInput:
+    project_evaluator_id: GlobalID
+
+
+@strawberry.type
+class ClearProjectEvaluatorQueuedEvaluationsPayload:
+    dropped_count: int = strawberry.field(description="Queued evaluations that were cleared.")
+    evaluator: ProjectEvaluator
+    query: Query
+
+
+@strawberry.input
 class ClearQueuedEvaluationsInput:
     project_id: GlobalID
 
@@ -921,7 +920,6 @@ class EvaluatorMutationMixin:
             user_id = int(user.identity)
             prompt_version.user_id = user_id
 
-        cleared: dict[models.EvaluationTarget, int] = {}
         try:
             async with info.context.db() as session:
                 pair = (
@@ -1034,13 +1032,10 @@ class EvaluatorMutationMixin:
                     )
                 if input.enabled is not UNSET:
                     assert input.enabled is not None
-                    cleared = await _set_project_evaluator_enabled(
-                        session, project_evaluator, input.enabled
-                    )
+                    project_evaluator.enabled = input.enabled
                 await session.flush()
         except (PostgreSQLIntegrityError, SQLiteIntegrityError):
             raise Conflict("A project evaluator with this name already exists for this project")
-        count_cleared_work(cleared)
 
         return ProjectEvaluatorMutationPayload(
             evaluator=ProjectEvaluator(id=project_evaluator.id, db_record=project_evaluator),
@@ -1299,7 +1294,6 @@ class EvaluatorMutationMixin:
                 sandbox_runtime=info.context.sandbox_runtime,
             )
 
-        cleared: dict[models.EvaluationTarget, int] = {}
         try:
             async with info.context.db() as session:
                 pair = (
@@ -1391,13 +1385,10 @@ class EvaluatorMutationMixin:
                     )
                 if input.enabled is not UNSET:
                     assert input.enabled is not None
-                    cleared = await _set_project_evaluator_enabled(
-                        session, project_evaluator, input.enabled
-                    )
+                    project_evaluator.enabled = input.enabled
                 await session.flush()
         except (PostgreSQLIntegrityError, SQLiteIntegrityError):
             raise Conflict("A project evaluator with this name already exists for this project")
-        count_cleared_work(cleared)
 
         return ProjectEvaluatorMutationPayload(
             evaluator=ProjectEvaluator(id=project_evaluator.id, db_record=project_evaluator),
@@ -1408,8 +1399,10 @@ class EvaluatorMutationMixin:
         permission_classes=[IsNotReadOnly, IsNotViewer, IsLocked],
         description=(
             "Enable or disable a project evaluator, leaving the underlying evaluator "
-            "untouched. Changing the flag clears the evaluator's queued evaluations. Works "
-            "for both LLM and CODE evaluators."
+            "untouched. This changes only whether the evaluator runs: its queued evaluations "
+            "stay queued, and a disabled evaluator's queued evaluations are dropped, not run, "
+            "when their turn comes. To remove them now, clear them with "
+            "clearProjectEvaluatorQueuedEvaluations. Works for both LLM and CODE evaluators."
         ),
     )  # type: ignore
     async def set_project_evaluator_enabled(
@@ -1425,12 +1418,38 @@ class EvaluatorMutationMixin:
             project_evaluator = await session.get(models.ProjectEvaluator, project_evaluator_id)
             if project_evaluator is None:
                 raise NotFound(f"Project evaluator not found: {input.project_evaluator_id}")
-            cleared = await _set_project_evaluator_enabled(
-                session, project_evaluator, input.enabled
-            )
+            project_evaluator.enabled = input.enabled
             await session.flush()
-        count_cleared_work(cleared)
         return ProjectEvaluatorMutationPayload(
+            evaluator=ProjectEvaluator(id=project_evaluator.id, db_record=project_evaluator),
+            query=Query(),
+        )
+
+    @strawberry.mutation(
+        permission_classes=[IsNotReadOnly, IsNotViewer, IsLocked],
+        description=(
+            "Clear the queued evaluations of one project evaluator, without enabling or "
+            "disabling it. Evaluations already running are not affected. Cleared evaluations "
+            "count as dropped, not failed."
+        ),
+    )  # type: ignore
+    async def clear_project_evaluator_queued_evaluations(
+        self, info: Info[Context, None], input: ClearProjectEvaluatorQueuedEvaluationsInput
+    ) -> ClearProjectEvaluatorQueuedEvaluationsPayload:
+        try:
+            project_evaluator_id = from_global_id_with_expected_type(
+                input.project_evaluator_id, ProjectEvaluator.__name__
+            )
+        except ValueError as error:
+            raise BadRequest(str(error))
+        async with info.context.db() as session:
+            project_evaluator = await session.get(models.ProjectEvaluator, project_evaluator_id)
+            if project_evaluator is None:
+                raise NotFound(f"Project evaluator not found: {input.project_evaluator_id}")
+            dropped = await drop_queued_work(session, [project_evaluator.id])
+        count_cleared_work(dropped)
+        return ClearProjectEvaluatorQueuedEvaluationsPayload(
+            dropped_count=sum(dropped.values()),
             evaluator=ProjectEvaluator(id=project_evaluator.id, db_record=project_evaluator),
             query=Query(),
         )
