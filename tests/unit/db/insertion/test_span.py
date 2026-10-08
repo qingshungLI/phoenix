@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -79,3 +80,21 @@ async def test_cumulative_rollups_only_follow_edges_within_the_trace(
 
         assert spans["target-parent"].cumulative_error_count == 0
         assert spans["foreign-parent"].cumulative_error_count == 0
+
+
+async def test_decision_spans_store_token_counts_from_decision_attributes(
+    db: DbSessionFactory,
+) -> None:
+    span = replace(
+        _span("decision", "decision-trace", "decision"),
+        span_kind=SpanKind.DECISION,
+        attributes={"decision": {"token_count": {"input": 345, "output": 38}}},
+    )
+    async with db() as session:
+        await insert_span(session, span, "project")
+        stored = await session.scalar(select(models.Span).where(models.Span.name == "decision"))
+    assert stored is not None
+    assert stored.llm_token_count_prompt == 345
+    assert stored.llm_token_count_completion == 38
+    assert stored.cumulative_llm_token_count_prompt == 345
+    assert stored.cumulative_llm_token_count_completion == 38

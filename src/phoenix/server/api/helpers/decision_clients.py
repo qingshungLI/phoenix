@@ -27,6 +27,7 @@ from phoenix.server.api.helpers.playground_clients import _resolve_provider_api_
 from phoenix.server.api.helpers.playground_registry import SingletonMeta
 from phoenix.server.api.input_types.GenerativeCredentialInput import GenerativeCredentialInput
 from phoenix.server.api.types.GenerativeProvider import GenerativeProvider, GenerativeProviderKey
+from phoenix.trace.decision import DecisionAttributes
 from phoenix.tracers import Tracer
 
 Description = str | dict[str, Any] | list[Any]
@@ -154,10 +155,10 @@ class DecisionClient(ABC):
             context=OtelContext(),
             attributes={
                 SpanAttributes.OPENINFERENCE_SPAN_KIND: "DECISION",
-                "decision.system": self.system,
-                "decision.provider": self.system,
-                "decision.model_name": self.model_name,
-                "decision.request.model_name": self.model_name,
+                DecisionAttributes.SYSTEM: self.system,
+                DecisionAttributes.PROVIDER: self.system,
+                DecisionAttributes.MODEL_NAME: self.model_name,
+                DecisionAttributes.REQUEST_MODEL_NAME: self.model_name,
                 SpanAttributes.INPUT_MIME_TYPE: "application/json",
                 SpanAttributes.INPUT_VALUE: json.dumps(body, ensure_ascii=False),
             },
@@ -191,13 +192,16 @@ class DecisionClient(ABC):
                     if isinstance(response_model, str) and response_model.strip()
                     else self.model_name
                 )
-                span.set_attribute("decision.response.model_name", resolved_model)
-                span.set_attribute("decision.model_name", resolved_model)
+                span.set_attribute(DecisionAttributes.RESPONSE_MODEL_NAME, resolved_model)
+                span.set_attribute(DecisionAttributes.MODEL_NAME, resolved_model)
                 usage = result.get("usage", {})
-                for direction in ("input", "output"):
-                    count = usage.get(f"{direction}_tokens")
+                for key, attribute in (
+                    ("input_tokens", DecisionAttributes.TOKEN_COUNT_INPUT),
+                    ("output_tokens", DecisionAttributes.TOKEN_COUNT_OUTPUT),
+                ):
+                    count = usage.get(key)
                     if isinstance(count, int) and count >= 0:
-                        span.set_attribute(f"decision.token_count.{direction}", count)
+                        span.set_attribute(attribute, count)
                 span.set_status(Status(StatusCode.OK))
                 return {**result, "answers": answers}
             except asyncio.CancelledError:
