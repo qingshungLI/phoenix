@@ -1,5 +1,17 @@
 # Changelog
 
+## [20.21.0](https://github.com/Arize-ai/phoenix/compare/arize-phoenix-v20.20.0...arize-phoenix-v20.21.0) (2026-10-09)
+
+
+### Features
+
+* assign a random gradient to projects created by ingestion ([#16873](https://github.com/Arize-ai/phoenix/issues/16873)) ([8946f7a](https://github.com/Arize-ai/phoenix/commit/8946f7a2d65e26b3a49a526963332dad7eb93a2e))
+
+
+### Documentation
+
+* Add Phoenix release notes — 2026-10-07 ([#16836](https://github.com/Arize-ai/phoenix/issues/16836)) ([bc474ef](https://github.com/Arize-ai/phoenix/commit/bc474eff80202151f16d3c8a585c8e43735d86a7))
+
 ## [20.20.0](https://github.com/Arize-ai/phoenix/compare/arize-phoenix-v20.19.0...arize-phoenix-v20.20.0) (2026-10-08)
 
 
